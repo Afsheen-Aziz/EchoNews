@@ -1,42 +1,54 @@
 import streamlit as st
 import speech_recognition as sr
-import pyttsx3
 import requests
+import re
+from dotenv import load_dotenv
+import os
+from gtts import gTTS
+import tempfile
+from genai_helper import ask_gemini
+# Load environment variables
+load_dotenv()
 
-# Set up Streamlit page
+# Streamlit config
 st.set_page_config(page_title="EchoNews", layout="centered")
 
-# Text-to-Speech engine
-engine = pyttsx3.init()
-
-# Your NewsAPI key
-API_KEY = "617cd71043ad4eedb9be05dfbd4f1aed"
+# News API
+NEWS_API_KEY = "617cd71043ad4eedb9be05dfbd4f1aed"
 NEWS_URL = "https://newsapi.org/v2/everything"
 
-# Function to fetch real news from NewsAPI
+# Title
+st.markdown("""
+    <div style="text-align: center;">
+        <h1>🎙️ EchoNews - Voice Controlled News App</h1>
+        <p>Ask for a topic like: <b>Technology</b>, or a question like: <i>What is quantum computing?</i></p>
+    </div>
+""", unsafe_allow_html=True)
+
+# Helpers
 def fetch_news(topic):
     params = {
         'q': topic,
         'sortBy': 'publishedAt',
         'language': 'en',
-        'apiKey': API_KEY,
-        'pageSize': 3  # limit to top 3 articles
+        'apiKey': NEWS_API_KEY,
+        'pageSize': 3
     }
     response = requests.get(NEWS_URL, params=params)
     if response.status_code == 200:
         articles = response.json().get("articles", [])
         if articles:
-            # Summarize top articles (titles + description)
-            summary = "\n\n".join(
-                [f"🔹 {a['title']} - {a['description'] or ''}" for a in articles]
-            )
+            summary = "\n\n".join([f"🔹 {a['title']} - {a['description'] or ''}" for a in articles])
             return summary
-        else:
-            return "No news found on this topic."
-    else:
-        return "Failed to fetch news. Please try again later."
+        return "No news found on this topic."
+    return "Failed to fetch news. Please try again later."
 
-# Function to get speech input from mic
+def speak_text(text):
+    tts = gTTS(text)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
+        tts.save(fp.name)
+        st.audio(fp.name, format="audio/mp3")
+
 def listen_to_user():
     recognizer = sr.Recognizer()
     with sr.Microphone() as source:
@@ -52,24 +64,37 @@ def listen_to_user():
             st.error("⚠️ Error with speech recognition service.")
     return ""
 
-# Title UI
-st.markdown(
-    """
-    <div style="text-align: center;">
-        <h1>🎙️ EchoNews - Voice Controlled News App</h1>
-        <p>Ask for a topic like: <b>Technology</b>, <b>Sports</b>, or <b>Politics</b></p>
-    </div>
-    """, unsafe_allow_html=True
-)
+def is_general_question(text):
+    return bool(re.search(r"\b(what|who|when|where|why|how|explain|define)\b", text.lower())) or "?" in text
 
-# Main button
+
+    # To integrate Gemini later, call Google GenAI API here
+
+# Main UI
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    if st.button("🎤 Tap to Speak"):
-        topic = listen_to_user()
-        if topic:
-            summary = fetch_news(topic)
-            st.subheader("📰 News Summary:")
-            st.write(summary)
-            engine.say(summary)
-            engine.runAndWait()
+    if st.button("🎤 Tap to Speak", key="main_button"):
+        user_input = listen_to_user()
+
+        if user_input:
+            if is_general_question(user_input):
+                st.subheader("🤖 Gemini Answer:")
+                answer = ask_gemini(user_input)
+                st.write(answer)
+                speak_text(answer)
+
+                if 'last_topic' in st.session_state:
+                    st.subheader("🔁 Resuming News:")
+                    summary = fetch_news(st.session_state['last_topic'])
+                    st.write(summary)
+                    speak_text(summary)
+
+            else:
+                st.session_state['last_topic'] = user_input
+                summary = fetch_news(user_input)
+                st.subheader("📰 News Summary:")
+                st.write(summary)
+                speak_text(summary)
+                
+            answer = ask_gemini(user_input)                
+
