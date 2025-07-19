@@ -6,3 +6,15 @@ sentence-transformers
 gtts
 streamlit_mic_recorder
 python-dotenv
+langchain
+langchain_community
+langchain_openai
+python-dotenv
+streamlit
+langchain_experimental
+sentence-transformers
+langchain_chroma
+langchainhub
+unstructured
+scikit-learn
+pandas
