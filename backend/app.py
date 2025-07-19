@@ -1,79 +1,75 @@
 import streamlit as st
-import streamlit.components.v1 as components
-import time
+import speech_recognition as sr
+import pyttsx3
+import requests
 
+# Set up Streamlit page
 st.set_page_config(page_title="EchoNews", layout="centered")
 
-st.title("🗣️ EchoNews - Voice Query News Assistant")
+# Text-to-Speech engine
+engine = pyttsx3.init()
 
-st.markdown("### 🎤 Speak your news query below")
+# Your NewsAPI key
+API_KEY = "617cd71043ad4eedb9be05dfbd4f1aed"
+NEWS_URL = "https://newsapi.org/v2/everything"
 
-# JavaScript mic + speech-to-text (browser-based)
-components.html(
+# Function to fetch real news from NewsAPI
+def fetch_news(topic):
+    params = {
+        'q': topic,
+        'sortBy': 'publishedAt',
+        'language': 'en',
+        'apiKey': API_KEY,
+        'pageSize': 3  # limit to top 3 articles
+    }
+    response = requests.get(NEWS_URL, params=params)
+    if response.status_code == 200:
+        articles = response.json().get("articles", [])
+        if articles:
+            # Summarize top articles (titles + description)
+            summary = "\n\n".join(
+                [f"🔹 {a['title']} - {a['description'] or ''}" for a in articles]
+            )
+            return summary
+        else:
+            return "No news found on this topic."
+    else:
+        return "Failed to fetch news. Please try again later."
+
+# Function to get speech input from mic
+def listen_to_user():
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        st.info("🎙️ Listening... Please speak.")
+        audio = recognizer.listen(source)
+        try:
+            text = recognizer.recognize_google(audio)
+            st.success(f"✅ You said: **{text}**")
+            return text
+        except sr.UnknownValueError:
+            st.error("❌ Could not understand your speech.")
+        except sr.RequestError:
+            st.error("⚠️ Error with speech recognition service.")
+    return ""
+
+# Title UI
+st.markdown(
     """
-    <html>
-    <body>
-        <button id="start" style="padding:10px; font-size:16px;">🎙 Start Recording</button>
-        <p id="status">Press "Start Recording" and speak your query.</p>
-        <textarea id="output" rows="4" cols="50" style="width:100%; padding:10px;"></textarea>
-
-        <script>
-            const startButton = document.getElementById("start");
-            const output = document.getElementById("output");
-            const status = document.getElementById("status");
-
-            let recognition;
-            if ('webkitSpeechRecognition' in window) {
-                recognition = new webkitSpeechRecognition();
-            } else {
-                status.innerText = "Your browser does not support speech recognition.";
-            }
-
-            if (recognition) {
-                recognition.continuous = false;
-                recognition.lang = 'en-US';
-                recognition.interimResults = false;
-
-                recognition.onstart = function () {
-                    status.innerText = "🎙 Listening...";
-                };
-
-                recognition.onresult = function (event) {
-                    const transcript = event.results[0][0].transcript;
-                    output.value = transcript;
-
-                    // Streamlit - send text to Python
-                    const streamlitInput = window.parent.document.querySelector('iframe[title="streamlit_app"]').contentWindow;
-                    streamlitInput.postMessage({isStreamlitMessage: true, type: "streamlit:setComponentValue", value: transcript}, "*");
-
-                    status.innerText = "✅ Done";
-                };
-
-                recognition.onerror = function (event) {
-                    status.innerText = 'Error occurred: ' + event.error;
-                };
-
-                recognition.onend = function () {
-                    status.innerText += " | You can speak again.";
-                };
-
-                startButton.onclick = () => {
-                    recognition.start();
-                };
-            }
-        </script>
-    </body>
-    </html>
-    """,
-    height=300,
+    <div style="text-align: center;">
+        <h1>🎙️ EchoNews - Voice Controlled News App</h1>
+        <p>Ask for a topic like: <b>Technology</b>, <b>Sports</b>, or <b>Politics</b></p>
+    </div>
+    """, unsafe_allow_html=True
 )
 
-# Now add a manual text box in case audio fails
-st.markdown("### 📝 Or type your query manually")
-query = st.text_input("Enter your query", "")
-
-if query:
-    st.success(f"Query received: {query}")
-    # Now pass this to your RAG system
-    # Example: response = rag_engine.get_answer(query)
-    # st.write(response)
+# Main button
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    if st.button("🎤 Tap to Speak"):
+        topic = listen_to_user()
+        if topic:
+            summary = fetch_news(topic)
+            st.subheader("📰 News Summary:")
+            st.write(summary)
+            engine.say(summary)
+            engine.runAndWait()
