@@ -1,79 +1,100 @@
 import streamlit as st
-import streamlit.components.v1 as components
-import time
+import speech_recognition as sr
+import requests
+import re
+from dotenv import load_dotenv
+import os
+from gtts import gTTS
+import tempfile
+from genai_helper import ask_gemini
+# Load environment variables
+load_dotenv()
 
+# Streamlit config
 st.set_page_config(page_title="EchoNews", layout="centered")
 
-st.title("🗣️ EchoNews - Voice Query News Assistant")
+# News API
+NEWS_API_KEY = "617cd71043ad4eedb9be05dfbd4f1aed"
+NEWS_URL = "https://newsapi.org/v2/everything"
 
-st.markdown("### 🎤 Speak your news query below")
+# Title
+st.markdown("""
+    <div style="text-align: center;">
+        <h1>🎙️ EchoNews - Voice Controlled News App</h1>
+        <p>Ask for a topic like: <b>Technology</b>, or a question like: <i>What is quantum computing?</i></p>
+    </div>
+""", unsafe_allow_html=True)
 
-# JavaScript mic + speech-to-text (browser-based)
-components.html(
-    """
-    <html>
-    <body>
-        <button id="start" style="padding:10px; font-size:16px;">🎙 Start Recording</button>
-        <p id="status">Press "Start Recording" and speak your query.</p>
-        <textarea id="output" rows="4" cols="50" style="width:100%; padding:10px;"></textarea>
+# Helpers
+def fetch_news(topic):
+    params = {
+        'q': topic,
+        'sortBy': 'publishedAt',
+        'language': 'en',
+        'apiKey': NEWS_API_KEY,
+        'pageSize': 3
+    }
+    response = requests.get(NEWS_URL, params=params)
+    if response.status_code == 200:
+        articles = response.json().get("articles", [])
+        if articles:
+            summary = "\n\n".join([f"🔹 {a['title']} - {a['description'] or ''}" for a in articles])
+            return summary
+        return "No news found on this topic."
+    return "Failed to fetch news. Please try again later."
 
-        <script>
-            const startButton = document.getElementById("start");
-            const output = document.getElementById("output");
-            const status = document.getElementById("status");
+def speak_text(text):
+    tts = gTTS(text)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
+        tts.save(fp.name)
+        st.audio(fp.name, format="audio/mp3")
 
-            let recognition;
-            if ('webkitSpeechRecognition' in window) {
-                recognition = new webkitSpeechRecognition();
-            } else {
-                status.innerText = "Your browser does not support speech recognition.";
-            }
+def listen_to_user():
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        st.info("🎙️ Listening... Please speak.")
+        audio = recognizer.listen(source)
+        try:
+            text = recognizer.recognize_google(audio)
+            st.success(f"✅ You said: **{text}**")
+            return text
+        except sr.UnknownValueError:
+            st.error("❌ Could not understand your speech.")
+        except sr.RequestError:
+            st.error("⚠️ Error with speech recognition service.")
+    return ""
 
-            if (recognition) {
-                recognition.continuous = false;
-                recognition.lang = 'en-US';
-                recognition.interimResults = false;
+def is_general_question(text):
+    return bool(re.search(r"\b(what|who|when|where|why|how|explain|define)\b", text.lower())) or "?" in text
 
-                recognition.onstart = function () {
-                    status.innerText = "🎙 Listening...";
-                };
 
-                recognition.onresult = function (event) {
-                    const transcript = event.results[0][0].transcript;
-                    output.value = transcript;
+    # To integrate Gemini later, call Google GenAI API here
 
-                    // Streamlit - send text to Python
-                    const streamlitInput = window.parent.document.querySelector('iframe[title="streamlit_app"]').contentWindow;
-                    streamlitInput.postMessage({isStreamlitMessage: true, type: "streamlit:setComponentValue", value: transcript}, "*");
+# Main UI
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    if st.button("🎤 Tap to Speak", key="main_button"):
+        user_input = listen_to_user()
 
-                    status.innerText = "✅ Done";
-                };
+        if user_input:
+            if is_general_question(user_input):
+                st.subheader("🤖 Gemini Answer:")
+                answer = ask_gemini(user_input)
+                st.write(answer)
+                speak_text(answer)
 
-                recognition.onerror = function (event) {
-                    status.innerText = 'Error occurred: ' + event.error;
-                };
+                if 'last_topic' in st.session_state:
+                    st.subheader("🔁 Resuming News:")
+                    summary = fetch_news(st.session_state['last_topic'])
+                    st.write(summary)
+                    speak_text(summary)
 
-                recognition.onend = function () {
-                    status.innerText += " | You can speak again.";
-                };
+            else:
+                st.session_state['last_topic'] = user_input
+                summary = fetch_news(user_input)
+                st.subheader("📰 News Summary:")
+                st.write(summary)
+                speak_text(summary)
+                
+            answer = ask_gemini(user_input)                
 
-                startButton.onclick = () => {
-                    recognition.start();
-                };
-            }
-        </script>
-    </body>
-    </html>
-    """,
-    height=300,
-)
-
-# Now add a manual text box in case audio fails
-st.markdown("### 📝 Or type your query manually")
-query = st.text_input("Enter your query", "")
-
-if query:
-    st.success(f"Query received: {query}")
-    # Now pass this to your RAG system
-    # Example: response = rag_engine.get_answer(query)
-    # st.write(response)
