@@ -1,0 +1,8 @@
+streamlit
+langchain
+google-generativeai
+faiss-cpu
+sentence-transformers
+gtts
+streamlit_mic_recorder
+python-dotenv
