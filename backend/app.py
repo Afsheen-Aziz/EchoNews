@@ -4,10 +4,10 @@ import re
 import os
 import time
 import tempfile
-import queue
 from gtts import gTTS
 import speech_recognition as sr
 from datetime import datetime
+import random
 
 # --- CONFIG ---
 st.set_page_config(
@@ -48,6 +48,19 @@ for key, default in {
     'echo_detected': False,
     'new_query': "",
     'echo_count': 0,
+    'interest_news_generated': False,
+    'topic_news_generated': False,
+    'last_interest_news': "",
+    'last_interest_articles': [],
+    'last_topic_news': "",
+    'last_topic_articles': [],
+    'audio_result': "",
+    'quiz_questions': [],
+    'quiz_answers': [],
+    'quiz_user_answers': [],
+    'quiz_show_result': False,
+    'quiz_options': [],
+    'quiz_active': False,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -115,13 +128,33 @@ def fetch_latest_news_for_interests():
         return "\n\n".join(all_news), all_articles
     return "No news found for your selected interests.", []
 
-def speak_text(text):
-    tts = gTTS(text)
+def clean_text_for_tts(text):
+    text = re.sub(r'[^\w\s.,;:!?\'\"-]', '', text, flags=re.UNICODE)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+def get_audio_bytes(text):
+    clean = clean_text_for_tts(text)
+    tts = gTTS(clean)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
         tts.save(fp.name)
-        st.session_state.is_playing_audio = True
-        st.audio(fp.name, format="audio/mp3")
-        st.session_state.is_playing_audio = False
+        with open(fp.name, "rb") as f:
+            audio_bytes = f.read()
+    os.remove(fp.name)
+    return audio_bytes
+
+def audio_with_optional_text(text, key_prefix):
+    audio_bytes = get_audio_bytes(text)
+    st.audio(audio_bytes, format="audio/mp3")
+    show_text = st.checkbox("Show Text", key=f"{key_prefix}_show_text")
+    if show_text:
+        st.markdown(f"<div class='news-card'>{text}</div>", unsafe_allow_html=True)
+
+def speak_text(text):
+    audio_bytes = get_audio_bytes(text)
+    st.session_state.is_playing_audio = True
+    st.audio(audio_bytes, format="audio/mp3")
+    st.session_state.is_playing_audio = False
 
 def listen_to_user():
     recognizer = sr.Recognizer()
@@ -165,6 +198,54 @@ def create_chat_bubble(content, is_ai=False):
             </div>
         </div>
         """
+
+def extract_entity_simple(text):
+    words = re.findall(r'\b[A-Z][a-z]+\b', text)
+    numbers = re.findall(r'\b\d{4}\b', text)
+    if words:
+        return words[0]
+    if numbers:
+        return numbers[0]
+    months = re.findall(r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\b', text)
+    if months:
+        return months[0]
+    return None
+
+def generate_quiz_from_articles(articles, num_questions=3):
+    questions = []
+    options = []
+    answers = []
+    entities = []
+    for art in articles:
+        title = art.get('title') or ''
+        desc = art.get('description') or ''
+        ent = extract_entity_simple(title + " " + desc)
+        entities.append(ent)
+    for i, art in enumerate(articles[:num_questions]):
+        title = art.get('title') or ''
+        desc = art.get('description') or ''
+        ent = extract_entity_simple(title + " " + desc)
+        if ent and ent in (desc or title):
+            q = f"<b>Which key person/place/number is mentioned in today's news?</b>"
+            correct = ent
+            distractors = [e for j, e in enumerate(entities) if e and j != i]
+            distractors = random.sample(distractors, min(3, len(distractors)))
+            opts = [correct] + distractors
+            random.shuffle(opts)
+            questions.append(q)
+            options.append(opts)
+            answers.append(correct)
+        else:
+            q = f"<b>What is the main topic of one of today's news items?</b>"
+            correct = title.split()[0] if title else "News"
+            distractors = [ (a.get('title') or '').split()[0] for a in articles if (a.get('title') or '') != title]
+            distractors = random.sample(distractors, min(3, len(distractors)))
+            opts = [correct] + distractors
+            random.shuffle(opts)
+            questions.append(q)
+            options.append(opts)
+            answers.append(correct)
+    return questions, options, answers
 
 # --- HEADER ---
 st.markdown("""
@@ -235,41 +316,75 @@ tab1, tab2, tab3, tab4 = st.tabs(["📰 News", "🎧 Audio", "❓ Q&A", "🎯 As
 with tab1:
     st.markdown("### 📰 Latest News")
     news, articles = fetch_latest_news()
-    st.markdown(news)
+    audio_with_optional_text(news, "latest_news")
+
+    # --- Personalized News by Interests ---
+    st.markdown("### 🌟 Personalized News (Based on Your Interests)")
+    if st.button("📰 Generate News for My Interests", key="interest_news_btn"):
+        summary, interest_articles = fetch_latest_news_for_interests()
+        st.session_state['last_interest_news'] = summary
+        st.session_state['last_interest_articles'] = interest_articles
+        st.session_state['interest_news_generated'] = True
+
+    if st.session_state.get('interest_news_generated'):
+        audio_with_optional_text(st.session_state['last_interest_news'], "interest_news")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔊 Listen to this news", key="listen_interest_news"):
+                speak_text(st.session_state['last_interest_news'])
+        with col2:
+            if st.button("📌 Bookmark this news", key="bookmark_interest_news"):
+                if st.session_state.get('last_interest_articles'):
+                    st.session_state.bookmarks.append(st.session_state['last_interest_articles'][0])
+                else:
+                    st.session_state.bookmarks.append({"title": st.session_state['last_interest_news'], "description": ""})
+                st.success("Bookmarked!")
+
+    # --- Search News by Topic ---
     st.markdown("### 🔎 Search News by Topic")
     topic = st.selectbox("Choose a topic", list(AVAILABLE_TOPICS.keys()))
     if st.button("Fetch News", key="fetch_topic_news"):
         summary, topic_articles = fetch_news(topic)
-        st.markdown(create_chat_bubble(summary, is_ai=True), unsafe_allow_html=True)
-        if st.button("🔊 Listen to this news", key="listen_topic_news"):
-            speak_text(summary)
-        if st.button("📌 Bookmark this news", key="bookmark_topic_news"):
-            if topic_articles:
-                st.session_state.bookmarks.append(topic_articles[0])
-            else:
-                st.session_state.bookmarks.append({"title": summary, "description": ""})
-            st.success("Bookmarked!")
+        st.session_state['last_topic_news'] = summary
+        st.session_state['last_topic_articles'] = topic_articles
+        st.session_state['topic_news_generated'] = True
+
+    if st.session_state.get('topic_news_generated'):
+        audio_with_optional_text(st.session_state['last_topic_news'], "topic_news")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔊 Listen to this news", key="listen_topic_news"):
+                speak_text(st.session_state['last_topic_news'])
+        with col2:
+            if st.button("📌 Bookmark this news", key="bookmark_topic_news"):
+                if st.session_state.get('last_topic_articles'):
+                    st.session_state.bookmarks.append(st.session_state['last_topic_articles'][0])
+                else:
+                    st.session_state.bookmarks.append({"title": st.session_state['last_topic_news'], "description": ""})
+                st.success("Bookmarked!")
 
 # --- TAB 2: AUDIO/VOICE ---
 with tab2:
     st.markdown("### 🎤 Voice News & Q&A")
     st.markdown("Tap below and speak your news topic or question.")
+
+    # Only update audio_result when button is pressed
     if st.button("🎤 Tap to Speak", key="voice_input_btn"):
         user_input = listen_to_user()
         if user_input:
             st.markdown(create_chat_bubble(user_input, is_ai=False), unsafe_allow_html=True)
             if is_latest_news_request(user_input):
                 latest_news, _ = fetch_latest_news_for_interests()
-                st.session_state.current_news_text = latest_news
-                st.markdown(create_chat_bubble(latest_news, is_ai=True), unsafe_allow_html=True)
-                speak_text(latest_news)
+                st.session_state.audio_result = latest_news
             elif is_general_question(user_input):
-                st.markdown(create_chat_bubble("Sorry, AI Q&A is not enabled in this demo.", is_ai=True), unsafe_allow_html=True)
+                st.session_state.audio_result = "Sorry, AI Q&A is not enabled in this demo."
             else:
                 summary, _ = fetch_news(user_input)
-                st.session_state.current_news_text = summary
-                st.markdown(create_chat_bubble(summary, is_ai=True), unsafe_allow_html=True)
-                speak_text(summary)
+                st.session_state.audio_result = summary
+
+    # Always show the last result (audio + checkbox) if it exists
+    if st.session_state.audio_result:
+        audio_with_optional_text(st.session_state.audio_result, "voice_audio_result")
 
 # --- TAB 3: Q&A ---
 with tab3:
@@ -277,7 +392,7 @@ with tab3:
     question = st.text_area("Enter your question:", height=100)
     if st.button("🔍 Get Answer", key="qa_btn"):
         if question:
-            st.markdown(create_chat_bubble("Sorry, AI Q&A is not enabled in this demo.", is_ai=True), unsafe_allow_html=True)
+            audio_with_optional_text("Sorry, AI Q&A is not enabled in this demo.", "qa_tab")
         else:
             st.warning("Please enter a question.")
 
@@ -291,37 +406,64 @@ with tab4:
             value=datetime.now().date(),
             max_value=datetime.now().date()
         )
-        # Just fetch latest news for the selected date (mock, as API doesn't support date filter in free tier)
         st.info("Showing latest news for selected date (demo, not date-filtered).")
         news, articles = fetch_latest_news()
-        for i, art in enumerate(articles):
-            st.markdown(f"""
-            <div class="news-card">
-                <h4>{i+1}. {art.get('title','')}</h4>
-                <p><strong>Category:</strong> General | <strong>Date:</strong> {selected_date}</p>
-                <p>{art.get('description','')}</p>
-                <p><strong>Relevance to UPSC:</strong> General Awareness</p>
-            </div>
-            """, unsafe_allow_html=True)
+
+        # Quiz state
+        quiz_active = st.session_state.get("quiz_active", False)
+
+        # Only show headlines if quiz is not active
+        if not quiz_active:
+            for i, art in enumerate(articles):
+                st.markdown(f"""
+                <div class="news-card">
+                    <h4>{i+1}. {art.get('title','')}</h4>
+                    <p><strong>Category:</strong> General | <strong>Date:</strong> {selected_date}</p>
+                    <p>{art.get('description','')}</p>
+                    <p><strong>Relevance to UPSC:</strong> General Awareness</p>
+                </div>
+                """, unsafe_allow_html=True)
+
         st.markdown("#### 🧠 Smart Quiz")
-        if st.button("🎯 Generate Quiz", key="quiz_btn"):
-            st.info("Quiz generation feature coming soon!")
-            st.markdown("""
-            <div class="news-card">
-                <h4>Sample MCQ:</h4>
-                <p><strong>Q:</strong> What is the capital of India?</p>
-                <ul>
-                    <li>A) Mumbai</li>
-                    <li>B) Delhi</li>
-                    <li>C) Kolkata</li>
-                    <li>D) Chennai</li>
-                </ul>
-                <p><strong>Answer:</strong> B) Delhi</p>
-            </div>
-            """, unsafe_allow_html=True)
+        if not quiz_active and st.button("🎯 Generate Quiz", key="quiz_btn"):
+            questions, options, answers = generate_quiz_from_articles(articles)
+            st.session_state.quiz_questions = questions
+            st.session_state.quiz_answers = answers
+            st.session_state.quiz_options = options
+            st.session_state.quiz_user_answers = [None] * len(questions)
+            st.session_state.quiz_show_result = False
+            st.session_state.quiz_active = True
+
+        if st.session_state.get("quiz_active"):
+            for idx, q in enumerate(st.session_state.quiz_questions):
+                st.markdown(f"**Q{idx+1}:** {q}", unsafe_allow_html=True)
+                st.session_state.quiz_user_answers[idx] = st.radio(
+                    f"Select answer for Q{idx+1}",
+                    st.session_state.quiz_options[idx],
+                    key=f"quiz_radio_{idx}"
+                )
+            if st.button("Submit Quiz", key="submit_quiz_btn"):
+                st.session_state.quiz_show_result = True
+
+        if st.session_state.get("quiz_show_result"):
+            correct = 0
+            for idx, user_ans in enumerate(st.session_state.quiz_user_answers):
+                if user_ans == st.session_state.quiz_answers[idx]:
+                    correct += 1
+            st.success(f"You got {correct} out of {len(st.session_state.quiz_questions)} correct!")
+            if st.button("Reset Quiz", key="reset_quiz_btn"):
+                st.session_state.quiz_questions = []
+                st.session_state.quiz_answers = []
+                st.session_state.quiz_options = []
+                st.session_state.quiz_user_answers = []
+                st.session_state.quiz_show_result = False
+                st.session_state.quiz_active = False
+
         st.markdown("#### 🎧 Daily Summary Podcast")
         if st.button("🎙️ Generate Daily Podcast", key="podcast_btn"):
-            st.info("Daily podcast generation feature coming soon!")
+            podcast_text = "Here are today's top headlines. " + " ".join([a.get('title', '') or '' for a in articles])
+            speak_text(podcast_text)
+            st.info("Playing today's headlines as a podcast.")
     else:
         st.markdown("### 🎯 Enable Aspirant Mode")
         st.info("Please enable Aspirant Mode in the sidebar to access UPSC/PSC features.")
