@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Voice Input</title>
+  <script>
+    const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+    recognition.lang = 'en-US';
+
+    function startListening() {
+      recognition.start();
+      document.getElementById("output").innerText = "🎤 Listening...";
+
+      recognition.onresult = function(event) {
+        const transcript = event.results[0][0].transcript;
+        document.getElementById("output").innerText = "✅ You said: " + transcript;
+        Streamlit.setComponentValue(transcript); // Send transcript back to Streamlit
+      };
+
+      recognition.onerror = function(event) {
+        document.getElementById("output").innerText = "❌ Error: " + event.error;
+      };
+    }
+
+    window.addEventListener("DOMContentLoaded", function() {
+      Streamlit.setComponentReady();
+      Streamlit.setFrameHeight(200);
+    });
+  </script>
+</head>
+<body>
+  <h4>🎤 Click below to speak</h4>
+  <button onclick="startListening()">🎙️ Start Listening</button>
+  <p id="output" style="font-weight:bold; color: green;"></p>
+</body>
+</html>
